@@ -101,22 +101,22 @@ print("\n" + "="*60)
 print("4. Reranking (Post-retrieval)")
 print("="*60)
 
-def simple_rerank(query, docs, top_k=5):
+def simple_rerank(search_query, doc_list, top_k=5):
     """
     Simple reranking using keyword overlap
 
     Production: Use Cohere Rerank or cross-encoder
     """
-    query_words = set(query.lower().split())
+    query_words = set(search_query.lower().split())
 
     def keyword_score(doc):
         doc_words = set(doc.page_content.lower().split())
         overlap = len(query_words & doc_words)
         return overlap / len(query_words) if query_words else 0
 
-    scored_docs = [(doc, keyword_score(doc)) for doc in docs]
+    scored_docs = [(d, keyword_score(d)) for d in doc_list]
     scored_docs.sort(key=lambda x: x[1], reverse=True)
-    return [doc for doc, score in scored_docs[:top_k]]
+    return [d for d, score in scored_docs[:top_k]]
 
 # =============================================================================
 # 5. QUERY EXPANSION - Expand questions

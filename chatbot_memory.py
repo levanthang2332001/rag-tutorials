@@ -67,15 +67,15 @@ rag_chain = (
     | StrOutputParser()
 )
 
-def chat_with_history(user_question, chat_history_messages, debug=False):
+def chat_with_history(question_input, chat_history_messages, debug=False):
     """Full flow: Condense question → Retrieve → Answer"""
     condensed_q = condense_question({
         "chat_history": chat_history_messages,
-        "question": user_question
+        "question": question_input
     })
 
     if debug:
-        print(f"\n[DEBUG] Original Question: {user_question}")
+        print(f"\n[DEBUG] Original Question: {question_input}")
         print(f"[DEBUG] Condensed Question: {condensed_q}")
         print(f"[DEBUG] Chat History: {len(chat_history_messages)} messages")
 
@@ -112,7 +112,7 @@ while True:
         print(f"Debug mode: {'ON' if debug_mode else 'OFF'}")
         continue
 
-    answer = chat_with_history(user_question, message_history, debug=debug_mode)
+    answer = chat_with_history(question_input=user_question, chat_history_messages=message_history, debug=debug_mode)
     print(f"\nBot: {answer}")
 
     message_history.append(HumanMessage(content=user_question))

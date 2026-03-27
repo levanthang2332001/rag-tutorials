@@ -37,19 +37,14 @@ def setup_rag():
     texts = [doc.page_content for doc in splits]
     metadatas = [doc.metadata for doc in splits]
 
-    # Embeddings
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     vectorstore = FAISS.from_texts(texts=texts, embedding=embeddings, metadatas=metadatas)
 
-    # BM25
-    bm25_retriever = BM25Retriever.from_texts(texts=texts, metadatas=metadatas, k=5)
+    bm25_ret = BM25Retriever.from_texts(texts=texts, metadatas=metadatas, k=5)
+    vector_ret = vectorstore.as_retriever(search_kwargs={"k": 5})
 
-    # Vector retriever
-    vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    return bm25_ret, vector_ret
 
-    return bm25_retriever, vector_retriever
-
-# Setup
 bm25_retriever, vector_retriever = setup_rag()
 
 # LLM
@@ -89,8 +84,8 @@ def expand_query(question):
          "Return only questions, one per line."),
         ("human", "Original question: {question}"),
     ])
-    response = llm.invoke(expansion_prompt.format(question=question))
-    queries = response.content.strip().split("\n")
+    llm_response = llm.invoke(expansion_prompt.format(question=question))
+    queries = llm_response.content.strip().split("\n")
     return [q.strip() for q in queries if q.strip()]
 
 

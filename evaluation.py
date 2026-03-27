@@ -292,13 +292,13 @@ for i, test in enumerate(test_cases, 1):
     print(f"\nTest Case {i}: {test['question']}")
 
     rag_answer = rag_chain.invoke({"question": test["question"]})
-    ctx_docs = advanced_retrieve(test["question"], k=5)
-    ctx = format_docs(ctx_docs)
+    retrieved_docs = advanced_retrieve(test["question"], k=5)
+    context_str = format_docs(retrieved_docs)
 
-    f_score = evaluate_faithfulness(ctx, rag_answer)
+    f_score = evaluate_faithfulness(context_str, rag_answer)
     r_score = evaluate_answer_relevancy(test["question"], rag_answer)
-    p_score = evaluate_context_precision(test["question"], ctx)
-    c_score = evaluate_context_recall(test["question"], ctx)
+    p_score = evaluate_context_precision(test["question"], context_str)
+    c_score = evaluate_context_recall(test["question"], context_str)
 
     print(f"  Faithfulness:      {f_score}/10")
     print(f"  Answer Relevancy: {r_score}/10")
@@ -315,35 +315,28 @@ print("="*60)
 # =============================================================================
 # RAGAS - PRODUCTION EVALUATION
 # =============================================================================
-"""
-================================================================================
-RAGAS - Production Evaluation Framework
-================================================================================
-
-RAGAS (RAG Assessment) is the standard framework for RAG evaluation:
-
-Install: pip install ragas datasets
-
-Metrics:
-- ragasFaithfulness: Faithfulness
-- ragasAnswerRelevancy: Answer relevancy
-- ragasContextPrecision: Context precision
-- ragasContextRecall: Context recall
-
-Usage:
-
-from ragas import evaluate
-from ragas.metrics import faithfulness, answer_relevancy
-from datasets import Dataset
-
-data = {
-    "question": ["What is AI?", "How does AI work?"],
-    "answer": ["AI is...", "AI works by..."],
-    "contexts": [["AI is artificial intelligence..."], ["AI uses algorithms..."]],
-    "ground_truths": [["AI is artificial intelligence, sim..."], ["AI works by..."]]
-}
-
-dataset = Dataset.from_dict(data)
-result = evaluate(dataset, metrics=[faithfulness, answer_relevancy])
-print(result)
-"""
+# RAGAS (RAG Assessment) is the standard framework for RAG evaluation:
+#
+# Install: pip install ragas datasets
+#
+# Metrics:
+# - ragasFaithfulness: Faithfulness
+# - ragasAnswerRelevancy: Answer relevancy
+# - ragasContextPrecision: Context precision
+# - ragasContextRecall: Context recall
+#
+# Usage:
+#   from ragas import evaluate
+#   from ragas.metrics import faithfulness, answer_relevancy
+#   from datasets import Dataset
+#
+#   data = {
+#       "question": ["What is AI?", "How does AI work?"],
+#       "answer": ["AI is...", "AI works by..."],
+#       "contexts": [["AI is..."], ["AI uses..."]],
+#       "ground_truths": [["AI is..."], ["AI works..."]]
+#   }
+#
+#   dataset = Dataset.from_dict(data)
+#   result = evaluate(dataset, metrics=[faithfulness, answer_relevancy])
+#   print(result)
