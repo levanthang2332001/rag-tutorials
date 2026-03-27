@@ -48,19 +48,19 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 # HELPER FUNCTIONS
 # =============================================================================
 
-def hybrid_retrieve(query, k=5, weights=[0.7, 0.3]):
-    """Combine BM25 + Vector"""
+def hybrid_retrieve(query, k=5, weights=None):
+    """Combine BM25 + Vector."""
+    if weights is None:
+        weights = [0.7, 0.3]
+
     bm25_docs = bm25_retriever.invoke(query)
     vector_docs = vector_retriever.invoke(query)
 
     combined = {}
-    seen_ids = set()
-
     for rank, doc in enumerate(bm25_docs, 1):
         score = weights[0] * (1.0 / rank)
         if doc.id not in combined:
             combined[doc.id] = {"doc": doc, "score": score}
-            seen_ids.add(doc.id)
         else:
             combined[doc.id]["score"] += score
 
@@ -68,7 +68,6 @@ def hybrid_retrieve(query, k=5, weights=[0.7, 0.3]):
         score = weights[1] * (1.0 / rank)
         if doc.id not in combined:
             combined[doc.id] = {"doc": doc, "score": score}
-            seen_ids.add(doc.id)
         else:
             combined[doc.id]["score"] += score
 
@@ -77,9 +76,11 @@ def hybrid_retrieve(query, k=5, weights=[0.7, 0.3]):
 
 
 def expand_query(question):
-    """Expand question"""
+    """Expand question into 3 different phrasings."""
     expansion_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Given a user question, generate 3 different ways to phrase it. Return only questions, one per line."),
+        ("system",
+         "Given a user question, generate 3 different ways to phrase it. "
+         "Return only questions, one per line."),
         ("human", "Original question: {question}"),
     ])
     response = llm.invoke(expansion_prompt.format(question=question))
@@ -88,20 +89,20 @@ def expand_query(question):
 
 
 def advanced_retrieve(question, k=10):
-    """Query expansion + hybrid retrieval"""
+    """Query expansion + hybrid retrieval + keyword rerank."""
     expanded_queries = expand_query(question)
     all_docs = []
     seen_ids = set()
 
     for q in expanded_queries:
-        docs = hybrid_retrieve(q, k=k)
-        for doc in docs:
+        retrieved_docs = hybrid_retrieve(q, k=k)
+        for doc in retrieved_docs:
             if doc.id not in seen_ids:
                 all_docs.append(doc)
                 seen_ids.add(doc.id)
 
-    # Simple rerank
     query_words = set(question.lower().split())
+
     def keyword_score(doc):
         doc_words = set(doc.page_content.lower().split())
         overlap = len(query_words & doc_words)
@@ -112,20 +113,23 @@ def advanced_retrieve(question, k=10):
     return [doc for doc, score in scored_docs[:k]]
 
 
-# RAG Chain
-template = """You are a helpful assistant. Answer based ONLY on the context provided.
+TEMPLATE = (
+    "You are a helpful assistant. Answer based ONLY on the context.\n"
+    "Context: {context}\n\n"
+    "Question: {question}\n\n"
+    "Answer based ONLY on the context above. "
+    "If the answer is not in the context, say 'I don't know'."
+)
 
-Context: {context}
-
-Question: {question}
-
-Answer based ONLY on the context above. If the answer is not in the context, say "I don't know". """
-
-prompt = ChatPromptTemplate.from_template(template)
+prompt = ChatPromptTemplate.from_template(TEMPLATE)
 
 rag_chain = (
     {
-        "context": itemgetter("question") | RunnableLambda(lambda q: advanced_retrieve(q)) | format_docs,
+        "context": (
+            itemgetter("question")
+            | RunnableLambda(advanced_retrieve)
+            | format_docs
+        ),
         "question": itemgetter("question"),
     }
     | prompt
@@ -163,12 +167,11 @@ Return only a number from 1-10."""),
 ])
 
 def evaluate_faithfulness(context, answer):
-    """Evaluate faithfulness"""
+    """Evaluate faithfulness."""
     response = llm.invoke(faithfulness_prompt.format(context=context, answer=answer))
     try:
-        score = int(response.content.strip())
-        return score
-    except:
+        return int(response.content.strip())
+    except (ValueError, AttributeError):
         return 0
 
 # =============================================================================
@@ -193,12 +196,11 @@ Return only a number from 1-10."""),
 ])
 
 def evaluate_answer_relevancy(question, answer):
-    """Evaluate answer relevancy"""
+    """Evaluate answer relevancy."""
     response = llm.invoke(relevancy_prompt.format(question=question, answer=answer))
     try:
-        score = int(response.content.strip())
-        return score
-    except:
+        return int(response.content.strip())
+    except (ValueError, AttributeError):
         return 0
 
 # =============================================================================
@@ -223,13 +225,12 @@ Return only a number from 1-10."""),
     ("human", "Question: {question}\n\nContext: {context}"),
 ])
 
-def evaluate_context_precision(question, context):
-    """Evaluate context precision"""
-    response = llm.invoke(precision_prompt.format(question=question, context=context))
+def evaluate_context_precision(question, ctx):
+    """Evaluate context precision."""
+    response = llm.invoke(precision_prompt.format(question=question, context=ctx))
     try:
-        score = int(response.content.strip())
-        return score
-    except:
+        return int(response.content.strip())
+    except (ValueError, AttributeError):
         return 0
 
 # =============================================================================
@@ -248,19 +249,19 @@ Context: Has history, types, AND applications → Recall = HIGH
 """)
 
 recall_prompt = ChatPromptTemplate.from_messages([
-    ("system", """Given a question and context, rate context recall from 1-10.
-Does the context contain all information needed to fully answer the question?
-Return only a number from 1-10."""),
+    ("system",
+     "Given a question and context, rate context recall from 1-10.\n"
+     "Does the context contain all information needed to fully answer?\n"
+     "Return only a number from 1-10."),
     ("human", "Question: {question}\n\nContext: {context}"),
 ])
 
-def evaluate_context_recall(question, context):
-    """Evaluate context recall"""
-    response = llm.invoke(recall_prompt.format(question=question, context=context))
+def evaluate_context_recall(question, ctx):
+    """Evaluate context recall."""
+    response = llm.invoke(recall_prompt.format(question=question, context=ctx))
     try:
-        score = int(response.content.strip())
-        return score
-    except:
+        return int(response.content.strip())
+    except (ValueError, AttributeError):
         return 0
 
 # =============================================================================
@@ -289,16 +290,14 @@ print("\n" + "-"*60)
 for i, test in enumerate(test_cases, 1):
     print(f"\nTest Case {i}: {test['question']}")
 
-    # Get answer
-    answer = rag_chain.invoke({"question": test["question"]})
-    context_docs = advanced_retrieve(test["question"], k=5)
-    context = format_docs(context_docs)
+    rag_answer = rag_chain.invoke({"question": test["question"]})
+    ctx_docs = advanced_retrieve(test["question"], k=5)
+    ctx = format_docs(ctx_docs)
 
-    # Evaluate
-    f_score = evaluate_faithfulness(context, answer)
-    r_score = evaluate_answer_relevancy(test["question"], answer)
-    p_score = evaluate_context_precision(test["question"], context)
-    c_score = evaluate_context_recall(test["question"], context)
+    f_score = evaluate_faithfulness(ctx, rag_answer)
+    r_score = evaluate_answer_relevancy(test["question"], rag_answer)
+    p_score = evaluate_context_precision(test["question"], ctx)
+    c_score = evaluate_context_recall(test["question"], ctx)
 
     print(f"  Faithfulness:      {f_score}/10")
     print(f"  Answer Relevancy: {r_score}/10")
@@ -306,7 +305,7 @@ for i, test in enumerate(test_cases, 1):
     print(f"  Context Recall:    {c_score}/10")
     print(f"  Avg Score:         {(f_score + r_score + p_score + c_score) / 4:.1f}/10")
 
-    print(f"\n  Answer: {answer[:150]}...")
+    print(f"\n  Answer: {rag_answer[:150]}...")
 
 print("\n" + "="*60)
 print("Phase 3 Demo Complete!")

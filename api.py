@@ -45,7 +45,11 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
-def hybrid_retrieve(query, k=5, weights=[0.7, 0.3]):
+def hybrid_retrieve(query, k=5, weights=None):
+    """Combine BM25 and vector retrieval with weighted scoring."""
+    if weights is None:
+        weights = [0.7, 0.3]
+
     bm25_docs = bm25_retriever.invoke(query)
     vector_docs = vector_retriever.invoke(query)
 
@@ -63,31 +67,37 @@ def hybrid_retrieve(query, k=5, weights=[0.7, 0.3]):
     sorted_results = sorted(combined.values(), key=lambda x: x["score"], reverse=True)
     return [item["doc"] for item in sorted_results[:k]]
 
+
 def expand_query(question):
+    """Expand a question into 3 different phrasings."""
     expansion_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Given a user question, generate 3 different ways to phrase it. Return only questions, one per line."),
+        ("system",
+         "Given a user question, generate 3 different ways to phrase it. "
+         "Return only questions, one per line."),
         ("human", "Original question: {question}"),
     ])
     response = llm.invoke(expansion_prompt.format(question=question))
     queries = response.content.strip().split("\n")
     return [q.strip() for q in queries if q.strip()]
 
+
 def advanced_retrieve(question, k=5):
+    """Query expansion + hybrid retrieval + deduplication."""
     expanded_queries = expand_query(question)
     all_docs = []
     seen_ids = set()
 
     for q in expanded_queries:
-        docs = hybrid_retrieve(q, k=k)
-        for doc in docs:
+        retrieved_docs = hybrid_retrieve(q, k=k)
+        for doc in retrieved_docs:
             if doc.id not in seen_ids:
                 all_docs.append(doc)
                 seen_ids.add(doc.id)
 
     return all_docs[:k]
 
-# RAG Chain
-template = """You are a helpful assistant. Answer based on the context.
+
+TEMPLATE = """You are a helpful assistant. Answer based on the context.
 
 Context: {context}
 
@@ -95,11 +105,15 @@ Question: {question}
 
 Answer:"""
 
-prompt = ChatPromptTemplate.from_template(template)
+prompt = ChatPromptTemplate.from_template(TEMPLATE)
 
 rag_chain = (
     {
-        "context": itemgetter("question") | RunnableLambda(lambda q: advanced_retrieve(q)) | format_docs,
+        "context": (
+            itemgetter("question")
+            | RunnableLambda(advanced_retrieve)
+            | format_docs
+        ),
         "question": itemgetter("question"),
     }
     | prompt
@@ -125,16 +139,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Models
 class QuestionRequest(BaseModel):
+    """Request model for chat endpoint."""
     question: str
     include_sources: bool = True
 
+
 class Source(BaseModel):
+    """Source document model."""
     content: str
     metadata: dict
 
+
 class AnswerResponse(BaseModel):
+    """Response model for chat endpoint."""
     answer: str
     sources: list[Source] | None = None
 
@@ -148,58 +166,50 @@ def root():
 
 @app.post("/chat", response_model=AnswerResponse)
 def chat(request: QuestionRequest):
-    """Chat endpoint - nhận câu hỏi, trả lời"""
+    """Chat endpoint - nhận câu hỏi, trả lời."""
     try:
-        # Get answer
         answer = rag_chain.invoke({"question": request.question})
 
-        # Get sources if requested
         sources = None
         if request.include_sources:
-            docs = advanced_retrieve(request.question, k=3)
+            retrieved_docs = advanced_retrieve(request.question, k=3)
             sources = [
                 Source(content=doc.page_content[:500], metadata=doc.metadata)
-                for doc in docs
+                for doc in retrieved_docs
             ]
 
         return AnswerResponse(answer=answer, sources=sources)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.post("/chat/history")
 def chat_with_history(request: QuestionRequest, session_id: str = "default"):
-    """Chat endpoint với chat history"""
+    """Chat endpoint với chat history."""
     try:
-        # Get or create chat history
         if session_id not in chat_histories:
             chat_histories[session_id] = ChatMessageHistory()
 
         history = chat_histories[session_id]
-
-        # Add user message
         history.add_user_message(request.question)
 
-        # Get answer
         answer = rag_chain.invoke({
             "question": request.question,
             "chat_history": history.messages
         })
 
-        # Add AI message
         history.add_ai_message(answer)
 
-        # Get sources
-        docs = advanced_retrieve(request.question, k=3)
+        retrieved_docs = advanced_retrieve(request.question, k=3)
         sources = [
             Source(content=doc.page_content[:500], metadata=doc.metadata)
-            for doc in docs
+            for doc in retrieved_docs
         ]
 
         return AnswerResponse(answer=answer, sources=sources)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.delete("/chat/history/{session_id}")
 def clear_history(session_id: str):
