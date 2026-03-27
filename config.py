@@ -1,15 +1,14 @@
-"""
-RAG Configuration - Shared setup for all RAG files
-"""
+"""RAG Configuration - Shared setup for all RAG files."""
 
 import warnings
-warnings.filterwarnings("ignore")
 
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.vectorstores.utils import DistanceStrategy
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+warnings.filterwarnings("ignore")
 
 MARKDOWN_SEPARATOR = [
     "\n#{1,6} ",

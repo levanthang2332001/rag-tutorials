@@ -8,21 +8,20 @@ Run: streamlit run streamlit_app.py
 """
 
 import warnings
-warnings.filterwarnings("ignore")
+from operator import itemgetter
 
 import streamlit as st
 from dotenv import load_dotenv
-from config import format_docs, split_documents, load_documents
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
 from langchain_community.retrievers.bm25 import BM25Retriever
+from langchain_community.vectorstores import FAISS
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_community.chat_message_histories import ChatMessageHistory
-from operator import itemgetter
+from langchain_core.runnables import RunnableLambda
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
+from config import format_docs, split_documents, load_documents
+
+warnings.filterwarnings("ignore")
 load_dotenv()
 
 # =============================================================================
@@ -59,8 +58,11 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
-def hybrid_retrieve(query, k=5, weights=[0.7, 0.3]):
-    """Combine BM25 + Vector"""
+def hybrid_retrieve(query, k=5, weights=None):
+    """Combine BM25 + Vector."""
+    if weights is None:
+        weights = [0.7, 0.3]
+
     bm25_docs = bm25_retriever.invoke(query)
     vector_docs = vector_retriever.invoke(query)
 
@@ -78,31 +80,35 @@ def hybrid_retrieve(query, k=5, weights=[0.7, 0.3]):
     sorted_results = sorted(combined.values(), key=lambda x: x["score"], reverse=True)
     return [item["doc"] for item in sorted_results[:k]]
 
+
 def expand_query(question):
-    """Expand question"""
+    """Expand question into 3 phrasings."""
     expansion_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Given a user question, generate 3 different ways to phrase it. Return only questions, one per line."),
+        ("system",
+         "Given a user question, generate 3 different ways to phrase it. "
+         "Return only questions, one per line."),
         ("human", "Original question: {question}"),
     ])
     response = llm.invoke(expansion_prompt.format(question=question))
     queries = response.content.strip().split("\n")
     return [q.strip() for q in queries if q.strip()]
 
+
 def advanced_retrieve(question, k=5):
-    """Query expansion + hybrid retrieval"""
+    """Query expansion + hybrid retrieval + rerank."""
     expanded_queries = expand_query(question)
     all_docs = []
     seen_ids = set()
 
-    for q in expanded_queries:
-        docs = hybrid_retrieve(q, k=k)
-        for doc in docs:
+    for q_expanded in expanded_queries:
+        retrieved = hybrid_retrieve(q_expanded, k=k)
+        for doc in retrieved:
             if doc.id not in seen_ids:
                 all_docs.append(doc)
                 seen_ids.add(doc.id)
 
-    # Rerank
     query_words = set(question.lower().split())
+
     def keyword_score(doc):
         doc_words = set(doc.page_content.lower().split())
         overlap = len(query_words & doc_words)
@@ -112,8 +118,8 @@ def advanced_retrieve(question, k=5):
     scored_docs.sort(key=lambda x: x[1], reverse=True)
     return [doc for doc, score in scored_docs[:k]]
 
-# RAG Chain
-template = """You are a helpful assistant. Answer based on the context.
+
+TEMPLATE = """You are a helpful assistant. Answer based on the context.
 
 Context: {context}
 
@@ -121,11 +127,15 @@ Question: {question}
 
 Answer:"""
 
-prompt = ChatPromptTemplate.from_template(template)
+prompt = ChatPromptTemplate.from_template(TEMPLATE)
 
 rag_chain = (
     {
-        "context": itemgetter("question") | RunnableLambda(lambda q: advanced_retrieve(q)) | format_docs,
+        "context": (
+            itemgetter("question")
+            | RunnableLambda(advanced_retrieve)
+            | format_docs
+        ),
         "question": itemgetter("question"),
     }
     | prompt

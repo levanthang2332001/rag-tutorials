@@ -1,5 +1,4 @@
-"""
-Phase 4: Production - FastAPI
+"""Phase 4: Production - FastAPI.
 
 API endpoint cho RAG chatbot
 
@@ -8,22 +7,23 @@ Run: uvicorn api:app --reload
 """
 
 import warnings
-warnings.filterwarnings("ignore")
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from dotenv import load_dotenv
-from config import format_docs, split_documents, load_documents
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers.bm25 import BM25Retriever
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.chat_message_histories import ChatMessageHistory
 from operator import itemgetter
 
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_community.retrievers.bm25 import BM25Retriever
+from langchain_community.vectorstores import FAISS
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from pydantic import BaseModel
+
+from config import format_docs, split_documents, load_documents
+
+warnings.filterwarnings("ignore")
 load_dotenv()
 
 # =============================================================================
@@ -162,6 +162,7 @@ chat_histories = {}
 # Routes
 @app.get("/")
 def root():
+    """Root endpoint."""
     return {"message": "RAG Chatbot API", "docs": "/docs"}
 
 @app.post("/chat", response_model=AnswerResponse)

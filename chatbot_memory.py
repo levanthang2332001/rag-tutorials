@@ -4,15 +4,15 @@ Multi-turn RAG Chatbot with Memory
 Flow: Condense → Retrieve → Answer
 """
 
-from dotenv import load_dotenv
 from operator import itemgetter
 
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
 
-from config import get_retriever, format_docs
+from config import format_docs, get_retriever
 
 load_dotenv()
 

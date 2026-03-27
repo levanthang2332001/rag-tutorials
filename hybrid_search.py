@@ -1,5 +1,4 @@
-"""
-Phase 2: Advanced Retrieval
+"""Phase 2: Advanced Retrieval.
 
 Learn:
 1. Hybrid Search - BM25 + Vector combination
@@ -10,18 +9,19 @@ Install: pip install rank_bm25
 """
 
 import warnings
-warnings.filterwarnings("ignore")
-
-from dotenv import load_dotenv
-from config import format_docs, split_documents, load_documents
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers.bm25 import BM25Retriever
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
-from langchain_core.prompts import ChatPromptTemplate
 from operator import itemgetter
 
+from dotenv import load_dotenv
+from langchain_community.retrievers.bm25 import BM25Retriever
+from langchain_community.vectorstores import FAISS
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+from config import format_docs, split_documents, load_documents
+
+warnings.filterwarnings("ignore")
 load_dotenv()
 
 # =============================================================================
@@ -68,45 +68,29 @@ print("\n" + "="*60)
 print("3. Hybrid Retriever (BM25 + Vector)")
 print("="*60)
 
-def hybrid_retrieve(query, k=5, weights=[0.5, 0.5]):
-    """
-    Combine BM25 + Vector retrieval
+def hybrid_retrieve(query, k=5, weights=None):
+    """Combine BM25 + Vector retrieval."""
+    if weights is None:
+        weights = [0.5, 0.5]
 
-    Args:
-        query: Question
-        k: Number of results to return
-        weights: [bm25_weight, vector_weight]
-
-    Returns:
-        List of documents with combined scores
-    """
-    # Retrieve from both methods
     bm25_docs = bm25_retriever.invoke(query)
     vector_docs = vector_retriever.invoke(query)
 
-    # Combine scores
     combined = {}
-    seen_ids = set()
-
-    # BM25 docs with scores (using rank position)
     for rank, doc in enumerate(bm25_docs, 1):
         score = weights[0] * (1.0 / rank)
         if doc.id not in combined:
             combined[doc.id] = {"doc": doc, "score": score}
-            seen_ids.add(doc.id)
         else:
             combined[doc.id]["score"] += score
 
-    # Vector docs with scores
     for rank, doc in enumerate(vector_docs, 1):
         score = weights[1] * (1.0 / rank)
         if doc.id not in combined:
             combined[doc.id] = {"doc": doc, "score": score}
-            seen_ids.add(doc.id)
         else:
             combined[doc.id]["score"] += score
 
-    # Sort by combined score
     sorted_results = sorted(combined.values(), key=lambda x: x["score"], reverse=True)
     return [item["doc"] for item in sorted_results[:k]]
 
@@ -144,15 +128,19 @@ print("="*60)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 expansion_prompt = ChatPromptTemplate.from_messages([
-    ("system", "Given a user question, generate 3 different ways to phrase it. Return only questions, one per line."),
+    ("system",
+     "Given a user question, generate 3 different ways to phrase it. "
+     "Return only questions, one per line."),
     ("human", "Original question: {question}"),
 ])
 
+
 def expand_query(question):
-    """Expand 1 question into 3 versions"""
+    """Expand 1 question into 3 versions."""
     response = llm.invoke(expansion_prompt.format(question=question))
     queries = response.content.strip().split("\n")
     return [q.strip() for q in queries if q.strip()]
+
 
 # =============================================================================
 # 6. FULL ADVANCED RAG CHAIN
@@ -161,7 +149,7 @@ print("\n" + "="*60)
 print("6. Full Advanced RAG Chain")
 print("="*60)
 
-template = """You are a helpful assistant. Answer based on the context.
+TEMPLATE = """You are a helpful assistant. Answer based on the context.
 
 Context: {context}
 
@@ -169,18 +157,18 @@ Question: {question}
 
 Answer:"""
 
-prompt = ChatPromptTemplate.from_template(template)
+prompt = ChatPromptTemplate.from_template(TEMPLATE)
 
 
 def advanced_retrieve(question, k=5):
-    """Query expansion + hybrid retrieval"""
+    """Query expansion + hybrid retrieval."""
     expanded_queries = expand_query(question)
     all_docs = []
     seen_ids = set()
 
-    for q in expanded_queries:
-        docs = hybrid_retrieve(q, k=k)
-        for doc in docs:
+    for q_expanded in expanded_queries:
+        retrieved = hybrid_retrieve(q_expanded, k=k)
+        for doc in retrieved:
             if doc.id not in seen_ids:
                 all_docs.append(doc)
                 seen_ids.add(doc.id)
@@ -190,7 +178,11 @@ def advanced_retrieve(question, k=5):
 
 advanced_rag_chain = (
     {
-        "context": itemgetter("question") | RunnableLambda(advanced_retrieve) | format_docs,
+        "context": (
+            itemgetter("question")
+            | RunnableLambda(advanced_retrieve)
+            | format_docs
+        ),
         "question": itemgetter("question"),
     }
     | prompt
@@ -235,9 +227,9 @@ if __name__ == "__main__":
 
     # Full chain test
     print("\n--- Full Chain Test ---")
-    test_q = "How does AI help in trading?"
-    result = advanced_rag_chain.invoke({"question": test_q})
-    print(f"\nQuestion: {test_q}")
+    TEST_Q = "How does AI help in trading?"
+    result = advanced_rag_chain.invoke({"question": TEST_Q})
+    print(f"\nQuestion: {TEST_Q}")
     print(f"Answer: {result[:300]}...")
 
     print("\n" + "="*60)

@@ -1,5 +1,4 @@
-"""
-Phase 3: RAG Evaluation
+"""Phase 3: RAG Evaluation.
 
 Learn evaluation metrics:
 1. Faithfulness - Is answer faithful to context?
@@ -11,18 +10,19 @@ Install: pip install ragas
 """
 
 import warnings
-warnings.filterwarnings("ignore")
-
-from dotenv import load_dotenv
-from config import format_docs, split_documents, load_documents
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers.bm25 import BM25Retriever
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
-from langchain_core.prompts import ChatPromptTemplate
 from operator import itemgetter
 
+from dotenv import load_dotenv
+from langchain_community.retrievers.bm25 import BM25Retriever
+from langchain_community.vectorstores import FAISS
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+from config import format_docs, split_documents, load_documents
+
+warnings.filterwarnings("ignore")
 load_dotenv()
 
 # =============================================================================
@@ -190,8 +190,9 @@ Answer: "Python is a programming language" → Relevancy = LOW
 """)
 
 relevancy_prompt = ChatPromptTemplate.from_messages([
-    ("system", """Given a question and answer, rate how well the answer addresses the question from 1-10.
-Return only a number from 1-10."""),
+    ("system",
+     "Given a question and answer, rate how well the answer addresses the "
+     "question from 1-10. Return only a number from 1-10."),
     ("human", "Question: {question}\n\nAnswer: {answer}"),
 ])
 
