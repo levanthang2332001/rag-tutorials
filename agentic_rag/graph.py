@@ -17,7 +17,7 @@ from .agents import (
     run_sql_agent,
 )
 
-from lib.openai.openai import get_llm
+from core.openai.openai import get_llm
 
 AGENT_REGISTRY: dict[str, callable] = {
     "pdf_agent": run_pdf_agent,

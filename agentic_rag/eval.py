@@ -2,7 +2,7 @@ import os
 import json
 from typing import Any
 from langsmith import Client, evaluate
-from lib.openai.openai import get_llm
+from core.openai.openai import get_llm
 from agentic_rag.graph import create_agent_graph
 
 
@@ -141,7 +141,7 @@ def create_eval_dataset():
     ]
 
     dataset = client.create_dataset(
-        name="agentic-rag-eval",
+        dataset_name="agentic-rag-eval",
         description="Evaluation dataset for Agentic RAG multi-agent system",
     )
 

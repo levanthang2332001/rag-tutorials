@@ -4,7 +4,7 @@ import traceback
 
 from agentic_rag.tools import calculator
 from agentic_rag.agents.create_agent import create_agent_runner, run_agent
-from lib.core.system_prompt import get_system_prompt
+from core.core.system_prompt import get_system_prompt
 
 
 def create_calculator_agent():
