@@ -7,14 +7,14 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from langsmith import Client
 
-# Absolute path to .env (project root)
-ROOT_DIR = Path(__file__).parent.parent.parent
-load_dotenv(ROOT_DIR / ".env")
+ROOT_DIR = Path(__file__).resolve().parent.parent
+ENV_PATH = ROOT_DIR / ".env"
+load_dotenv(ENV_PATH)
 
 
 class Config(BaseSettings):
   model_config = SettingsConfigDict(
-    env_file=".env",
+    env_file=str(ENV_PATH),
     env_file_encoding="utf-8",
     env_ignore_empty=True,
     extra="ignore",

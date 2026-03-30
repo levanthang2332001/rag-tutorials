@@ -4,7 +4,7 @@ import traceback
 
 from agentic_rag.tools import wikipedia_search
 from agentic_rag.agents.create_agent import create_agent_runner, run_agent
-from core.core.system_prompt import get_system_prompt
+from core.system_prompt import get_system_prompt
 
 
 def create_wikipedia_agent():
