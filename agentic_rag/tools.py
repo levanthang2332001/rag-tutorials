@@ -11,6 +11,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 
 from agentic_rag.config import format_docs, split_documents, load_documents
+from core.config import get_config
 
 from langchain_tavily import TavilySearch
 
@@ -30,7 +31,10 @@ def pdf_retriever(query: str) -> str:
     texts = [doc.page_content for doc in splits]
     metadatas = [doc.metadata for doc in splits]
 
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    embeddings = OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        api_key=get_config().openai_api_key,
+    )
     vectorstore = FAISS.from_texts(texts=texts, embedding=embeddings, metadatas=metadatas)
     vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     bm25_retriever = BM25Retriever.from_texts(texts=texts, metadatas=metadatas, k=5)
@@ -135,6 +139,13 @@ def code_executor(code: str) -> str:
 
     Returns: stdout/stderr from code execution.
     """
+    # Guard: if input looks like a natural-language request, do not execute.
+    if _looks_like_natural_language_request(code):
+        return (
+            "Input appears to be a coding request, not executable Python code. "
+            "Please provide Python code to run, or ask for code generation/explanation."
+        )
+
     try:
         result = subprocess.run(
             ["python", "-c", code],
@@ -150,6 +161,38 @@ def code_executor(code: str) -> str:
         return "Error: Code execution timed out (10s limit)."
     except Exception as e:
         return f"Error executing code: {e}"
+
+
+def _looks_like_natural_language_request(text: str) -> bool:
+    """Heuristic check to avoid executing plain natural-language prompts as code."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    # Simple signals that this is likely prose, not Python source.
+    prose_markers = [
+        "write",
+        "explain",
+        "how to",
+        "please",
+        "can you",
+        "help me",
+        "show me",
+        "?",
+    ]
+    python_markers = [
+        "def ",
+        "import ",
+        "print(",
+        "for ",
+        "while ",
+        "if ",
+        "class ",
+        "=",
+        ":",
+    ]
+    has_prose = any(marker in stripped.lower() for marker in prose_markers)
+    has_python_signal = any(marker in stripped for marker in python_markers)
+    return has_prose and not has_python_signal
 
 
 @tool
