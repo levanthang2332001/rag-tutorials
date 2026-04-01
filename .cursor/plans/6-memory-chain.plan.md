@@ -1,6 +1,14 @@
+---
+name: ""
+overview: ""
+todos: []
+isProject: false
+---
+
 # Plan 6: Memory & Chain
 
 ## Overview
+
 Implement conversation memory and wrap LangGraph with a simple chain interface.
 
 ## File: `agentic_rag/memory.py`

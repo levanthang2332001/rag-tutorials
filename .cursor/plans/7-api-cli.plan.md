@@ -1,6 +1,14 @@
+---
+name: ""
+overview: ""
+todos: []
+isProject: false
+---
+
 # Plan 7: API & CLI
 
 ## Overview
+
 Create FastAPI server and CLI chatbot to expose the multi-agent system.
 
 ## File: `agentic_api.py`
