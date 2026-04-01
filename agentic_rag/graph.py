@@ -54,6 +54,10 @@ Rules:
 - Only select agents that are truly necessary, do not over-select
 - If it's a math question: only calculator_agent
 - If asking about general knowledge: only wikipedia_agent
+- If asking about content from papers/documents/PDFs OR mentioning "paper", "document", "pdf", "the paper says": use pdf_agent
+- If asking about data in database/tables/SQL: use sql_agent
+- If asking about code/programming: use code_agent
+- If needing current news/web info: use web_agent
 - If needing multiple sources: select max 3 agents
 - If previous attempt lacked information: select additional agents
 
@@ -64,6 +68,7 @@ Return only valid JSON (no explanation):
 def orchestrator_node(state: AgentState) -> dict:
     """Route query to appropriate agents - stores selected agents in state."""
     query = state["query"]
+    current_request = _extract_current_request(query)
     iterations = state.get("iterations", 0)
     previous_results = state.get("agent_results", {})
 
@@ -79,7 +84,7 @@ def orchestrator_node(state: AgentState) -> dict:
     llm = get_llm()
 
     routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
-        query=query,
+        query=current_request,
         agent_list=agent_list,
         previous_attempt=previous_attempt,
     )
@@ -100,10 +105,83 @@ def orchestrator_node(state: AgentState) -> dict:
     if not selected:
         selected = ["wikipedia_agent"]
 
+    # Deterministic routing for coding intents - replace selection with code_agent only.
+    if _is_strict_code_query(current_request) or _looks_like_code_query(current_request):
+        selected = ["code_agent"]
+
     return {
         "selected_agents": selected,
         "iterations": iterations,
+        "query": current_request,
     }
+
+
+def _extract_current_request(query: str) -> str:
+    """Extract latest user request from contextual query payload."""
+    marker = ">>> CURRENT USER REQUEST (needs answer) <<<"
+    if marker not in query:
+        return query
+    extracted = query.split(marker, maxsplit=1)[1].strip()
+    return extracted or query
+
+
+def _looks_like_code_query(query: str) -> bool:
+    """Heuristic detection for programming/code related requests."""
+    query_lower = query.lower()
+    code_keywords = [
+        "code",
+        "python",
+        "javascript",
+        "typescript",
+        "java",
+        "c++",
+        "c#",
+        "function",
+        "class",
+        "bug",
+        "debug",
+        "fix",
+        "implement",
+        "algorithm",
+        "sql query",
+        "script",
+        "refactor",
+        "stack trace",
+        "exception",
+        "error in code",
+    ]
+    return any(keyword in query_lower for keyword in code_keywords)
+
+
+def _is_strict_code_query(query: str) -> bool:
+    """Detect requests that should be handled only by code_agent."""
+    query_lower = query.lower()
+    strict_markers = [
+        "refactor",
+        "rewrite code",
+        "write code",
+        "implement",
+        "debug",
+        "fix this code",
+        "optimize this code",
+        "code review",
+        "explain this code",
+        "def ",
+        "class ",
+        "stack trace",
+    ]
+    non_code_markers = [
+        "news",
+        "wikipedia",
+        "latest",
+        "paper",
+        "pdf",
+        "database",
+        "sql",
+    ]
+    is_code = any(marker in query_lower for marker in strict_markers)
+    has_non_code = any(marker in query_lower for marker in non_code_markers)
+    return is_code and not has_non_code
 
 
 def route_to_agents(state: AgentState) -> list[Send]:
@@ -151,6 +229,7 @@ Guidelines:
 - If agents have conflicting information, note the differences
 - If important information is missing, note what's missing
 - Answer in the same language as the query
+- If the query is about coding/refactoring/debugging, include concrete code blocks
 - Minimum length: 2-3 complete sentences"""
 
 
@@ -167,12 +246,21 @@ def synthesizer_node(state: AgentState) -> dict:
             "missing_info": True,
         }
 
+    # For strict coding flows, return code_agent output directly to avoid dilution.
+    if list(results.keys()) == ["code_agent"]:
+        code_answer = str(results["code_agent"]).strip()
+        return {
+            "answer": code_answer,
+            "iterations": iterations,
+            "missing_info": _detect_missing_info(code_answer),
+        }
+
     results_text = "\n\n".join(
         f"[{agent.upper()}]\n{result}"
         for agent, result in results.items()
     )
 
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    llm = get_llm()
 
     response = llm.invoke(
         SYNTHESIS_PROMPT_TEMPLATE.format(
