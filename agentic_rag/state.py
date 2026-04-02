@@ -26,9 +26,21 @@ class AgentState(TypedDict):
     answer: Optional[str]
     iterations: int
     missing_info: bool
+    confidence: float
+    conflicts: bool
+    needed_agents: list[str]
+    sub_questions: list[SubQuestion]
 
 
 class AgentInvokeState(TypedDict):
     """State for individual agent invocation via Send()."""
     query: str
     agent_name: str
+
+
+class SubQuestion(TypedDict):
+    """A decomposed sub-task to run on a specific specialist agent."""
+    id: str
+    task_type: str
+    agent_name: str
+    text: str

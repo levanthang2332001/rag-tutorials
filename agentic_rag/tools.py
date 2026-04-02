@@ -4,6 +4,9 @@ import warnings
 import math
 import subprocess
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import os
 
 from langchain_core.tools import tool
 from langchain_community.retrievers.bm25 import BM25Retriever
@@ -17,6 +20,50 @@ from langchain_tavily import TavilySearch
 
 warnings.filterwarnings("ignore")
 
+_PDF_RETRIEVERS_CACHE: dict[str, object] | None = None
+_PDF_RETRIEVERS_LOCK = threading.Lock()
+_WIKIPEDIA_CACHE: dict[str, str] = {}
+_WIKIPEDIA_LOCK = threading.Lock()
+
+
+def _get_pdf_retrievers() -> dict[str, object]:
+    """Build and cache PDF retrievers once (FAISS + BM25)."""
+    global _PDF_RETRIEVERS_CACHE
+    if _PDF_RETRIEVERS_CACHE is not None:
+        return _PDF_RETRIEVERS_CACHE
+
+    with _PDF_RETRIEVERS_LOCK:
+        if _PDF_RETRIEVERS_CACHE is not None:
+            return _PDF_RETRIEVERS_CACHE
+
+        docs = load_documents()
+        splits = split_documents(docs)
+        texts = [doc.page_content for doc in splits]
+        metadatas = [doc.metadata for doc in splits]
+
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-small",
+            api_key=get_config().openai_api_key,
+        )
+        vectorstore = FAISS.from_texts(
+            texts=texts,
+            embedding=embeddings,
+            metadatas=metadatas,
+        )
+        vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+        bm25_retriever = BM25Retriever.from_texts(
+            texts=texts,
+            metadatas=metadatas,
+            k=5,
+        )
+
+        _PDF_RETRIEVERS_CACHE = {
+            "vector_retriever": vector_retriever,
+            "bm25_retriever": bm25_retriever,
+        }
+        return _PDF_RETRIEVERS_CACHE
+
+
 @tool
 def pdf_retriever(query: str) -> str:
     """Search internal PDF documents for relevant information.
@@ -26,18 +73,9 @@ def pdf_retriever(query: str) -> str:
 
     Returns: Relevant context from PDFs with citations.
     """
-    docs = load_documents()
-    splits = split_documents(docs)
-    texts = [doc.page_content for doc in splits]
-    metadatas = [doc.metadata for doc in splits]
-
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        api_key=get_config().openai_api_key,
-    )
-    vectorstore = FAISS.from_texts(texts=texts, embedding=embeddings, metadatas=metadatas)
-    vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-    bm25_retriever = BM25Retriever.from_texts(texts=texts, metadatas=metadatas, k=5)
+    retrievers = _get_pdf_retrievers()
+    vector_retriever = retrievers["vector_retriever"]
+    bm25_retriever = retrievers["bm25_retriever"]
 
     # Hybrid retrieve (BM25 + Vector)
     bm25_docs = bm25_retriever.invoke(query)
@@ -65,18 +103,36 @@ def web_search(query: str) -> str:
     Use when: user asks about recent events, stock prices,
     weather, news, or anything requiring up-to-date internet data.
 
-    Returns: Formatted search results with titles, URLs, and snippets.
+    Returns: Formatted search results with `Source URL:` markers.
     """
 
-    search = TavilySearch()
-    results = search.invoke(query)
+    # Tavily can be slow/fragile depending on the query; enforce tight timeout.
+    # We run it in a thread so the tool does not block indefinitely.
+    search = TavilySearch(search_depth="fast", max_results=3)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(search.invoke, query)
+            results = future.result(timeout=15)
+    except TimeoutError:
+        return "Source: web\nSource URL: N/A\nSource Title: Tavily timeout\nExcerpt: Search timed out."
+    except Exception as e:
+        return f"Source: web\nSource URL: N/A\nSource Title: Tavily error\nExcerpt: {str(e)}"
 
     formatted = []
     for r in results:
         title = r.get("title", "N/A")
         url = r.get("url", "N/A")
         content = r.get("content", "N/A")[:500]
-        formatted.append(f"Title: {title}\nURL: {url}\nContent: {content}")
+        formatted.append(
+            "\n".join(
+                [
+                    "Source: web",
+                    f"Source URL: {url}",
+                    f"Source Title: {title}",
+                    f"Excerpt: {content}",
+                ]
+            )
+        )
 
     if not formatted:
         return "No search results found."
@@ -92,6 +148,11 @@ def calculator(expression: str) -> str:
 
     Returns: The computed result or error message.
     """
+    if os.getenv("DEBUG_TOOLS") == "1":
+        print(
+            "[DEBUG_TOOLS] calculator input head:",
+            (expression or "")[:120].replace("\n", " "),
+        )
     allowed_funcs = {
         "abs": abs, "round": round, "min": min, "max": max,
         "sum": sum, "pow": pow, "sqrt": math.sqrt, "log": math.log,
@@ -113,19 +174,53 @@ def wikipedia_search(query: str) -> str:
     Use when: user asks about definitions, historical facts,
     biographical information, or well-established knowledge.
 
-    Returns: Wikipedia summary (first 3 sentences) or not found message.
+    Returns: Wikipedia summary with `Source URL:` markers.
     """
+    if os.getenv("DEBUG_TOOLS") == "1":
+        print(
+            "[DEBUG_TOOLS] wikipedia_search input head:",
+            (query or "")[:200].replace("\n", " "),
+        )
     import wikipedia as wiki
 
+    normalized = (query or "").strip()
+    cache_key = normalized.lower()
+    with _WIKIPEDIA_LOCK:
+        cached = _WIKIPEDIA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
-        summary = wiki.summary(query, sentences=3)
-        return summary
+        # Keep tool simple: it may be executed concurrently by LangGraph.
+        # Avoid nested ThreadPoolExecutors which can be unstable.
+        page = wiki.page(query, auto_suggest=True)
+        summary = wiki.summary(page.title, sentences=3)
+        result = "\n".join(
+            [
+                "Source: wikipedia",
+                f"Source URL: {page.url}",
+                f"Source Title: {page.title}",
+                f"Excerpt: {summary}",
+            ]
+        )
+        with _WIKIPEDIA_LOCK:
+            _WIKIPEDIA_CACHE[cache_key] = result
+        return result
     except wiki.exceptions.DisambiguationError:
-        return f"Wikipedia: Multiple matches found for '{query}'. Please be more specific."
+        result = f"Wikipedia: Multiple matches found for '{query}'. Please be more specific."
+        with _WIKIPEDIA_LOCK:
+            _WIKIPEDIA_CACHE[cache_key] = result
+        return result
     except wiki.exceptions.PageError:
-        return f"Wikipedia: No page found for '{query}'."
+        result = f"Wikipedia: No page found for '{query}'."
+        with _WIKIPEDIA_LOCK:
+            _WIKIPEDIA_CACHE[cache_key] = result
+        return result
     except Exception:
-        return f"Wikipedia: Error searching for '{query}'."
+        result = f"Wikipedia: Error searching for '{query}'."
+        with _WIKIPEDIA_LOCK:
+            _WIKIPEDIA_CACHE[cache_key] = result
+        return result
 
 
 @tool

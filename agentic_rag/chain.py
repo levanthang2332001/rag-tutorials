@@ -31,7 +31,7 @@ class AgenticChain:
           return_raw_state: If True, return full state
 
       Returns:
-          dict with answer, session_id, iterations, agents_used
+          dict with answer, session_id, iterations, agents_used, agent_results
       """
       # Build contextual query from recent chat history so follow-up prompts
       # (e.g., "refactor that code") still contain the referenced code context.
@@ -45,9 +45,13 @@ class AgenticChain:
           "query": contextual_query,
           "selected_agents": [],
           "agent_results": {},
+          "sub_questions": [],
           "answer": "",
           "iterations": 0,
           "missing_info": False,
+          "confidence": 0.0,
+          "conflicts": False,
+          "needed_agents": [],
       }
 
       try:
@@ -68,6 +72,7 @@ class AgenticChain:
           "session_id": session_id,
           "iterations": result.get("iterations", 0),
           "agents_used": list(result.get("agent_results", {}).keys()),
+          "agent_results": result.get("agent_results", {}),
       }
 
       if return_raw_state:
