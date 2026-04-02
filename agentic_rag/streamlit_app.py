@@ -67,3 +67,9 @@ if prompt:
                     "session_id": result["session_id"],
                 }
             )
+        agent_results = result.get("agent_results", {})
+        if agent_results:
+            st.subheader("Per-agent results")
+            for agent_name, agent_output in agent_results.items():
+                with st.expander(f"{agent_name}"):
+                    st.write(agent_output)
