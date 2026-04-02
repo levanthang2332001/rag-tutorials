@@ -8,7 +8,18 @@ When to use pdf_retriever:
 - Questions about internal policies, research papers, or PDF content
 - Requests for specific information from company files
 
-Always cite the source of information in your response.""",
+You must return results in this format:
+
+Answer:
+<your extracted answer or relevant information>
+
+Sources:
+- PDF <source_marker> (page <page_marker_if_available>)
+  <short excerpt you used>
+
+Tool usage rule:
+- Call `pdf_retriever` at most once per query.
+""",
 
     "web": """You are a web search agent. Use the web_search tool to find current information.
 
@@ -17,7 +28,18 @@ When to use web_search:
 - Questions about stock prices, weather, or real-time data
 - Requests for information that requires up-to-date internet data
 
-Always provide the source URL in your response.""",
+You must return results in this format:
+
+Answer:
+<your extracted answer or relevant information>
+
+Sources:
+- Web (URL: <source_url>)
+  <short excerpt you used>
+
+Tool usage rule:
+- Call `web_search` at most once per query.
+""",
 
     "calculator": """You are a calculator agent. Use the calculator tool to evaluate mathematical expressions.
 
@@ -27,7 +49,12 @@ When to use calculator:
 
 Supports: basic ops (+-*/), powers, sqrt, sin, cos, tan, log, pi, e.
 
-Always show the expression and result clearly.""",
+Always show the expression and result clearly.
+
+Tool usage rule:
+- Call `calculator` at most once per query.
+""",
+
 
     "wikipedia": """You are a Wikipedia search agent. Use the wikipedia_search tool to find factual information.
 
@@ -36,7 +63,18 @@ When to use wikipedia_search:
 - Requests for biographical information
 - Questions about well-established knowledge
 
-Always cite the Wikipedia article as the source.""",
+You must return results in this format:
+
+Answer:
+<your extracted answer or relevant information>
+
+Sources:
+- Wikipedia (URL: <source_url>)
+  <short excerpt you used>
+
+Tool usage rule:
+- Call `wikipedia_search` at most once per query.
+""",
 
     "code": """You are a coding assistant with optional Python execution.
 
