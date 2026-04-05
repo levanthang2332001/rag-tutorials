@@ -1,10 +1,14 @@
 """Chain wrapper for LangGraph multi-agent system."""
 
-from typing import Optional
+from __future__ import annotations
 
-from .graph import create_agent_graph
-from .memory import ConversationMemory
-from .state import AgentState
+from typing import Any
+
+from ..graph import create_agent_graph
+from ..memory import ConversationMemory
+from ..state import AgentState
+from .context import build_contextual_query, build_initial_state
+from .stream_events import build_final_event, iter_normalized_graph_events
 
 
 class AgenticChain:
@@ -33,26 +37,12 @@ class AgenticChain:
       Returns:
           dict with answer, session_id, iterations, agents_used, agent_results
       """
-      # Build contextual query from recent chat history so follow-up prompts
-      # (e.g., "refactor that code") still contain the referenced code context.
       session_id = session_id.strip() or "default"
       recent_messages = self.memory.get_last_n_messages(session_id, n=6)
-      contextual_query = self._build_contextual_query(query, recent_messages, n=6)
+      contextual_query = build_contextual_query(query, recent_messages, n=6)
       self.memory.add_user_message(session_id, query)
 
-      initial_state: AgentState = {
-          "messages": [],
-          "query": contextual_query,
-          "selected_agents": [],
-          "agent_results": {},
-          "sub_questions": [],
-          "answer": "",
-          "iterations": 0,
-          "missing_info": False,
-          "confidence": 0.0,
-          "conflicts": False,
-          "needed_agents": [],
-      }
+      initial_state: AgentState = build_initial_state(contextual_query)
 
       try:
           result = self.graph.invoke(initial_state)
@@ -80,22 +70,38 @@ class AgenticChain:
 
       return response
 
-  def _build_contextual_query(self, query: str, messages: list, n: int = 6) -> str:
-      """Attach short recent context so agents can resolve follow-up references."""
-      if not messages:
-          return query
+  def stream(
+      self,
+      query: str,
+      session_id: str = "default",
+  ):
+      """Stream graph execution as normalized events.
 
-      context_lines = []
-      for message in messages[-n:]:
-          role = "User" if message.type == "human" else "Assistant"
-          context_lines.append(f"{role}: {message.content}")
+      Yields dict events shaped like:
+      - {"type": "start", "session_id": ..., "query": ...}
+      - {"type": "orchestrator", "selected_agents": [...], "sub_questions": [...]}
+      - {"type": "agent_done", "agent_name": ..., "output": ...}
+      - {"type": "synth_done", "answer": ..., "iterations": ..., "missing_info": ...}
+      - {"type": "verify_done", "confidence": ..., "missing_info": ..., "conflicts": ...}
+      - {"type": "final", "answer": ..., "session_id": ..., "iterations": ..., "agents_used": [...], "agent_results": {...}}
+      """
+      session_id = session_id.strip() or "default"
+      recent_messages = self.memory.get_last_n_messages(session_id, n=6)
+      contextual_query = build_contextual_query(query, recent_messages, n=6)
+      self.memory.add_user_message(session_id, query)
 
-      context_block = "\n".join(context_lines)
-      return (
-          "=== CONVERSATION HISTORY (for context only) ===\n"
-          f"{context_block}\n\n"
-          f">>> CURRENT USER REQUEST (needs answer) <<<\n{query}"
-      )
+      initial_state: AgentState = build_initial_state(contextual_query)
+
+      yield {"type": "start", "session_id": session_id, "query": query}
+
+      final_state: dict[str, Any] = {}
+      for event in iter_normalized_graph_events(self.graph, initial_state, final_state):
+          yield event
+
+      answer = final_state.get("answer", "No answer generated")
+      self.memory.add_ai_message(session_id, answer)
+
+      yield build_final_event(session_id, final_state)
 
   def chat(self, query: str, session_id: str = "default") -> str:
       """Simple chat interface - returns just the answer string."""

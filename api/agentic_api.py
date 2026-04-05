@@ -104,39 +104,17 @@ def chat(request: ChatRequest) -> ChatResponse:
 def chat_stream(request: ChatRequest) -> StreamingResponse:
     """Stream progress events via SSE.
 
-    Note: This emits events after `chain.invoke()` completes to keep the
-    endpoint stable across LangGraph versions.
+    Emits events incrementally during graph execution.
     """
 
     def event_generator():
         try:
-            yield "event: start\ndata: {}\n\n".format(
-                json.dumps({"session_id": request.session_id})
-            )
-
-            result = chain.invoke(request.question, request.session_id)
-            agent_results: dict[str, str] = result.get("agent_results", {}) or {}
-
-            for agent_name, agent_output in agent_results.items():
-                yield "event: agent_done\ndata: {}\n\n".format(
-                    json.dumps(
-                        {
-                            "agent_name": agent_name,
-                            "output": agent_output,
-                        }
-                    )
+            for event in chain.stream(request.question, request.session_id):
+                event_type = str(event.get("type", "message"))
+                yield "event: {}\ndata: {}\n\n".format(
+                    event_type,
+                    json.dumps(event),
                 )
-
-            yield "event: final\ndata: {}\n\n".format(
-                json.dumps(
-                    {
-                        "answer": result.get("answer", ""),
-                        "session_id": result.get("session_id", request.session_id),
-                        "iterations": result.get("iterations", 0),
-                        "agents_used": result.get("agents_used", []),
-                    }
-                )
-            )
         except Exception as error:
             yield "event: error\ndata: {}\n\n".format(
                 json.dumps({"error": str(error)})

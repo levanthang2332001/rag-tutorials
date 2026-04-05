@@ -30,16 +30,16 @@ def test_prompts_have_sources() -> None:
 
 
 def test_pdf_cache_reuse_without_build() -> None:
-    import agentic_rag.tools as tools
+    from agentic_rag.tools import pdf_retrieval
 
     sentinel = {"vector_retriever": object(), "bm25_retriever": object()}
-    old_cache = tools._PDF_RETRIEVERS_CACHE
+    old_cache = pdf_retrieval._PDF_RETRIEVERS_CACHE
     try:
-        tools._PDF_RETRIEVERS_CACHE = sentinel
-        rebuilt = tools._get_pdf_retrievers()
+        pdf_retrieval._PDF_RETRIEVERS_CACHE = sentinel
+        rebuilt = pdf_retrieval._get_pdf_retrievers()
         assert rebuilt is sentinel, "Cache should be reused (identity check)"
     finally:
-        tools._PDF_RETRIEVERS_CACHE = old_cache
+        pdf_retrieval._PDF_RETRIEVERS_CACHE = old_cache
 
 
 if __name__ == "__main__":

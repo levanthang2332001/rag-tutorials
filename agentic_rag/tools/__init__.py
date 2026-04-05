@@ -1,67 +1,28 @@
 """Base tools for all agents - using @tool decorator."""
 
-import warnings
-import math
-import subprocess
-import sqlite3
-import threading
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from __future__ import annotations
+
 import os
+import sqlite3
+import subprocess
+import sys
+import warnings
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from langchain_core.tools import tool
-from langchain_community.retrievers.bm25 import BM25Retriever
-from langchain_community.vectorstores import FAISS
-from langchain_openai import OpenAIEmbeddings
-
-from agentic_rag.config import format_docs, split_documents, load_documents
-from core.config import get_config
-
 from langchain_tavily import TavilySearch
 
+from agentic_rag.config import format_docs
+
+from .cache import _BoundedTtlCache, _WIKIPEDIA_CACHE  # noqa: F401
+from .calculator_eval import evaluate_calculator_expression
+from .code_guard import looks_like_natural_language_request
+from .pdf_retrieval import (
+    _PDF_RETRIEVERS_CACHE,  # noqa: F401
+    _get_pdf_retrievers,
+)
+
 warnings.filterwarnings("ignore")
-
-_PDF_RETRIEVERS_CACHE: dict[str, object] | None = None
-_PDF_RETRIEVERS_LOCK = threading.Lock()
-_WIKIPEDIA_CACHE: dict[str, str] = {}
-_WIKIPEDIA_LOCK = threading.Lock()
-
-
-def _get_pdf_retrievers() -> dict[str, object]:
-    """Build and cache PDF retrievers once (FAISS + BM25)."""
-    global _PDF_RETRIEVERS_CACHE
-    if _PDF_RETRIEVERS_CACHE is not None:
-        return _PDF_RETRIEVERS_CACHE
-
-    with _PDF_RETRIEVERS_LOCK:
-        if _PDF_RETRIEVERS_CACHE is not None:
-            return _PDF_RETRIEVERS_CACHE
-
-        docs = load_documents()
-        splits = split_documents(docs)
-        texts = [doc.page_content for doc in splits]
-        metadatas = [doc.metadata for doc in splits]
-
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            api_key=get_config().openai_api_key,
-        )
-        vectorstore = FAISS.from_texts(
-            texts=texts,
-            embedding=embeddings,
-            metadatas=metadatas,
-        )
-        vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-        bm25_retriever = BM25Retriever.from_texts(
-            texts=texts,
-            metadatas=metadatas,
-            k=5,
-        )
-
-        _PDF_RETRIEVERS_CACHE = {
-            "vector_retriever": vector_retriever,
-            "bm25_retriever": bm25_retriever,
-        }
-        return _PDF_RETRIEVERS_CACHE
 
 
 @tool
@@ -77,7 +38,6 @@ def pdf_retriever(query: str) -> str:
     vector_retriever = retrievers["vector_retriever"]
     bm25_retriever = retrievers["bm25_retriever"]
 
-    # Hybrid retrieve (BM25 + Vector)
     bm25_docs = bm25_retriever.invoke(query)
     vector_docs = vector_retriever.invoke(query)
 
@@ -105,9 +65,6 @@ def web_search(query: str) -> str:
 
     Returns: Formatted search results with `Source URL:` markers.
     """
-
-    # Tavily can be slow/fragile depending on the query; enforce tight timeout.
-    # We run it in a thread so the tool does not block indefinitely.
     search = TavilySearch(search_depth="fast", max_results=3)
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -137,7 +94,9 @@ def web_search(query: str) -> str:
     if not formatted:
         return "No search results found."
 
-    return "\n\n".join(formatted)
+    joined = "\n\n".join(formatted)
+    return joined[:4000]
+
 
 @tool
 def calculator(expression: str) -> str:
@@ -153,18 +112,7 @@ def calculator(expression: str) -> str:
             "[DEBUG_TOOLS] calculator input head:",
             (expression or "")[:120].replace("\n", " "),
         )
-    allowed_funcs = {
-        "abs": abs, "round": round, "min": min, "max": max,
-        "sum": sum, "pow": pow, "sqrt": math.sqrt, "log": math.log,
-        "sin": math.sin, "cos": math.cos, "tan": math.tan,
-        "pi": math.pi, "e": math.e
-    }
-
-    try:
-        result = eval(expression, {"__builtins__": {}, **allowed_funcs}, {})
-        return str(result)
-    except Exception as e:
-        return f"Error: {e}"
+    return evaluate_calculator_expression(expression)
 
 
 @tool
@@ -185,14 +133,11 @@ def wikipedia_search(query: str) -> str:
 
     normalized = (query or "").strip()
     cache_key = normalized.lower()
-    with _WIKIPEDIA_LOCK:
-        cached = _WIKIPEDIA_CACHE.get(cache_key)
+    cached = _WIKIPEDIA_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
     try:
-        # Keep tool simple: it may be executed concurrently by LangGraph.
-        # Avoid nested ThreadPoolExecutors which can be unstable.
         page = wiki.page(query, auto_suggest=True)
         summary = wiki.summary(page.title, sentences=3)
         result = "\n".join(
@@ -203,23 +148,19 @@ def wikipedia_search(query: str) -> str:
                 f"Excerpt: {summary}",
             ]
         )
-        with _WIKIPEDIA_LOCK:
-            _WIKIPEDIA_CACHE[cache_key] = result
+        _WIKIPEDIA_CACHE.set(cache_key, result)
         return result
     except wiki.exceptions.DisambiguationError:
         result = f"Wikipedia: Multiple matches found for '{query}'. Please be more specific."
-        with _WIKIPEDIA_LOCK:
-            _WIKIPEDIA_CACHE[cache_key] = result
+        _WIKIPEDIA_CACHE.set(cache_key, result)
         return result
     except wiki.exceptions.PageError:
         result = f"Wikipedia: No page found for '{query}'."
-        with _WIKIPEDIA_LOCK:
-            _WIKIPEDIA_CACHE[cache_key] = result
+        _WIKIPEDIA_CACHE.set(cache_key, result)
         return result
     except Exception:
         result = f"Wikipedia: Error searching for '{query}'."
-        with _WIKIPEDIA_LOCK:
-            _WIKIPEDIA_CACHE[cache_key] = result
+        _WIKIPEDIA_CACHE.set(cache_key, result)
         return result
 
 
@@ -234,8 +175,7 @@ def code_executor(code: str) -> str:
 
     Returns: stdout/stderr from code execution.
     """
-    # Guard: if input looks like a natural-language request, do not execute.
-    if _looks_like_natural_language_request(code):
+    if looks_like_natural_language_request(code):
         return (
             "Input appears to be a coding request, not executable Python code. "
             "Please provide Python code to run, or ask for code generation/explanation."
@@ -243,10 +183,10 @@ def code_executor(code: str) -> str:
 
     try:
         result = subprocess.run(
-            ["python", "-c", code],
+            [sys.executable, "-c", code],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
         output = result.stdout
         if result.stderr:
@@ -256,38 +196,6 @@ def code_executor(code: str) -> str:
         return "Error: Code execution timed out (10s limit)."
     except Exception as e:
         return f"Error executing code: {e}"
-
-
-def _looks_like_natural_language_request(text: str) -> bool:
-    """Heuristic check to avoid executing plain natural-language prompts as code."""
-    stripped = text.strip()
-    if not stripped:
-        return True
-    # Simple signals that this is likely prose, not Python source.
-    prose_markers = [
-        "write",
-        "explain",
-        "how to",
-        "please",
-        "can you",
-        "help me",
-        "show me",
-        "?",
-    ]
-    python_markers = [
-        "def ",
-        "import ",
-        "print(",
-        "for ",
-        "while ",
-        "if ",
-        "class ",
-        "=",
-        ":",
-    ]
-    has_prose = any(marker in stripped.lower() for marker in prose_markers)
-    has_python_signal = any(marker in stripped for marker in python_markers)
-    return has_prose and not has_python_signal
 
 
 @tool
